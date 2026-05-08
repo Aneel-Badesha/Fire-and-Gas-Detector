@@ -31,12 +31,12 @@ This project implements a comprehensive fire and gas detection system using mult
 ### Development Environment
 - **Development OS**: Debian Linux
 - **Programming Language**: C (C17, POSIX threads)
-- **Toolchain**: `arm-linux-gnueabihf-gcc` cross-compiler
+- **Toolchain**: `arm-linux-gnueabihf-gcc` cross-compiler (auto-detected; falls back to native `gcc`)
 - **Deployment**: Cross-compiled for ARM architecture (BeagleBone Green)
 
 ### Key Features
 - Real-time multi-threaded sensor monitoring (8 pthreads: user, temperature, IR, air sensors, status, alarm, output, watchdog)
-- Rolling-average filtering on temperature and IR readings
+- Exponential moving average (EMA, α=0.6) filtering on all sensor readings
 - I2C communication for LED matrix control
 - Alarm state management with warning, general, and obstructed-sensor states
 - Mutex-protected shared state between threads
@@ -70,8 +70,8 @@ This project implements a comprehensive fire and gas detection system using mult
 ## Getting Started
 
 ### Prerequisites
-- Linux development environment
-- `arm-linux-gnueabihf-gcc` cross-compilation toolchain
+- Linux development environment (native or WSL)
+- `arm-linux-gnueabihf-gcc` cross-compilation toolchain (optional; falls back to `gcc`)
 - BeagleBone Green with required sensors
 - 8x8 LED matrix display
 
@@ -81,15 +81,18 @@ This project implements a comprehensive fire and gas detection system using mult
 3. Ensure proper power supply for all components
 
 ### Build & Deployment
-The [Makefile](Makefile) targets the BeagleBone Green and stages the binary for deployment:
+The [Makefile](Makefile) outputs all build artifacts to the `build/` directory and auto-detects the compiler:
 
 ```
-make          # cross-compile and copy to $(HOME)/cmpt433/public/myApps/main
-make clean    # remove build artifacts
+make          # compile; binary output to build/main
+make clean    # remove build/ directory
 ```
 
-1. Cross-compile the C source on the host
-2. Transfer the executable to the BeagleBone Green (via the shared `myApps` directory or `scp`)
+- If `arm-linux-gnueabihf-gcc` is installed, it is used for ARM cross-compilation
+- Otherwise falls back to native `gcc` (useful for WSL/x86 development without the toolchain)
+
+1. Cross-compile the C source on the host (install toolchain: `sudo apt install gcc-arm-linux-gnueabihf`)
+2. Transfer `build/main` to the BeagleBone Green via `scp` or a shared NFS directory
 3. Ensure I2C access is configured (`main.c` calls `config-pin` for P9_17/P9_18 at startup)
 4. Run the binary on the target; press the USER button to shut down
 

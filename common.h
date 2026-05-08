@@ -20,7 +20,7 @@
 #define CO2POINT 0.9
 #define SMOKEPOINT 0.65
 
-#define BUFFER_SIZE 10
+#define EMA_ALPHA 0.6
 
 #define WATCHDOG_TIMEOUT_S 5
 #define WATCHDOG_THREAD_COUNT 6
@@ -55,11 +55,11 @@ struct thread_data
     // Uses mutexWatchdog
     time_t watchdog_kicks[WATCHDOG_THREAD_COUNT];
 
-    double temp_value, smoke_value, CO_value, CO2_value, IR_value; 
+    double temp_value, smoke_value, CO_value, CO2_value, IR_value;
     bool alarm_temp, alarm_smoke, alarm_CO, alarm_CO2, alarm_IR;
     bool warning_alarm, general_alarm, obstructed_alarm;
 
-    double IR_buffer[BUFFER_SIZE];
+    double IR_ema;
 };
 
 // Sleep in ms

@@ -191,23 +191,17 @@ void *calculateStatus(void *arg)
             }
             pthread_mutex_unlock(&data->mutexTemp);
 
-            int ir_count = 0;
-            double ir_sum = 0.0;
+            double ir_ema = 0.0;
             pthread_mutex_lock(&data->mutexIR);
             {
-                for(int i = 0; i < BUFFER_SIZE; i++) {
-                    if(thresholdHigh(data->IR_buffer[i], IRPOINT) == true) {
-                        ir_count++;
-                    }
-                    ir_sum += data->IR_buffer[i];
-                }
-                data->IR_value = ir_sum / BUFFER_SIZE;
+                ir_ema = data->IR_ema;
+                data->IR_value = ir_ema;
             }
             pthread_mutex_unlock(&data->mutexIR);
 
             pthread_mutex_lock(&data->mutexAlarm);
             {
-                data->alarm_IR    = (ir_count == BUFFER_SIZE);
+                data->alarm_IR    = thresholdHigh(ir_ema, IRPOINT);
                 data->alarm_temp  = thresholdLow(temp_value, TEMPPOINT);
                 data->alarm_CO    = thresholdHigh(co_value, COPOINT);
                 data->alarm_CO2   = thresholdHigh(co2_value, CO2POINT);
@@ -240,7 +234,7 @@ void *calcAlarm(void *arg)
     // Hold timer: when an alarm/warning fires, keep it asserted for
     // ALARM_HOLD_TICKS more iterations so brief sensor dips don't drop the
     // siren. One tick = ~250 ms (see sleepForMs at end of loop).
-    const int ALARM_HOLD_TICKS = BUFFER_SIZE;
+    const int ALARM_HOLD_TICKS = 10;
     int hold_ticks_remaining = 0;
 
     bool temp_trigger, ir_trigger, smoke_trigger, CO_trigger, CO2_trigger;

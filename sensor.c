@@ -27,15 +27,15 @@ bool getVoltageReading(const char *path, int *out_value)
     return true;
 }
 
-double calVoltageTemp(int voltage) // compute the int voltage reading to double (from 0)
+double calVoltageTemp(int voltage)
 {
     double result = (A2D_VOLTAGE_REF_V) * ((double)voltage / (double)A2D_MAX_READING);
     double temperature = (double)(1000 * result - 500) / (double)10;
     return temperature;
 }
 
-double calVoltage(int voltage)  {
-
+double calVoltage(int voltage)
+{
     double value = (A2D_VOLTAGE_REF_V) * ((double)voltage / (double)A2D_MAX_READING);
     return value;
 }
@@ -44,11 +44,9 @@ void *readTemperature(void *arg)
 {
     struct thread_data *data = arg;
     bool end_thread = false;
-    bool initialization = true;
-    int index = 0;
-
+    bool initialized = false;
+    double ema = 0.0;
     int raw_data = 0;
-    double cal_values[BUFFER_SIZE] = {0};
 
     pthread_mutex_lock(&data->mutexTemp);
     {
@@ -56,8 +54,7 @@ void *readTemperature(void *arg)
     }
     pthread_mutex_unlock(&data->mutexTemp);
 
-    while(1) {
-
+    while (1) {
         pthread_mutex_lock(&data->mutexControl);
         {
             end_thread = data->end_all_threads;
@@ -66,44 +63,25 @@ void *readTemperature(void *arg)
 
         watchdogKick(data, WATCHDOG_IDX_TEMP);
 
-        if(end_thread == false) {
-            index = index % BUFFER_SIZE;
-
-            if(initialization == true) {
-                for(int i = 0; i < BUFFER_SIZE; i++) {
-                    // First initialization
-                    if (getVoltageReading(A2D_FILE_VOLTAGE0, &raw_data)) {
-                        cal_values[i] = calVoltageTemp(raw_data);
-                    }
-                    // Fill up buffer quickly
-                    sleepForMs(10);
+        if (end_thread == false) {
+            if (getVoltageReading(A2D_FILE_VOLTAGE0, &raw_data)) {
+                double sample = calVoltageTemp(raw_data);
+                if (!initialized) {
+                    ema = sample;
+                    initialized = true;
+                } else {
+                    ema = EMA_ALPHA * sample + (1.0 - EMA_ALPHA) * ema;
                 }
-
-                initialization = false;
-            }
-            else {
-                if (getVoltageReading(A2D_FILE_VOLTAGE0, &raw_data)) {
-                    cal_values[index] = calVoltageTemp(raw_data);
-                }
-                index++;
-            }
-            
-            double value = 0;
-            for(int i = 0; i < BUFFER_SIZE; i++) {
-                // Calculate average
-                value = value + cal_values[i];
             }
 
             pthread_mutex_lock(&data->mutexTemp);
             {
-                data->temp_value = value / BUFFER_SIZE;
+                data->temp_value = ema;
             }
             pthread_mutex_unlock(&data->mutexTemp);
-     
+
             sleepForMs(250);
-            
-        } 
-        else {
+        } else {
             return NULL;
         }
     }
@@ -111,24 +89,20 @@ void *readTemperature(void *arg)
 
 void *readIR(void *arg)
 {
-    
     struct thread_data *data = arg;
     bool end_thread = false;
-    bool initialization = true;
-
-    int index = 0;
+    bool initialized = false;
+    double ema = 0.0;
     int raw_data = 0;
 
     pthread_mutex_lock(&data->mutexIR);
     {
         data->IR_value = 0;
-        for (int i = 0; i < BUFFER_SIZE; i++) {
-            data->IR_buffer[i] = 0.0;
-        }
+        data->IR_ema = 0.0;
     }
     pthread_mutex_unlock(&data->mutexIR);
 
-    while(1) {
+    while (1) {
         pthread_mutex_lock(&data->mutexControl);
         {
             end_thread = data->end_all_threads;
@@ -137,38 +111,25 @@ void *readIR(void *arg)
 
         watchdogKick(data, WATCHDOG_IDX_IR);
 
-        if(end_thread == false) {
-            index = index % BUFFER_SIZE;
-
-            if(initialization == true) {
-                for(int i = 0; i < BUFFER_SIZE; i++) {
-                    if (getVoltageReading(A2D_FILE_VOLTAGE1, &raw_data)) {
-                        pthread_mutex_lock(&data->mutexIR);
-                        {
-                            data->IR_buffer[i] = calVoltage(raw_data);
-                        }
-                        pthread_mutex_unlock(&data->mutexIR);
-                    }
-
-                    sleepForMs(10);
+        if (end_thread == false) {
+            if (getVoltageReading(A2D_FILE_VOLTAGE1, &raw_data)) {
+                double sample = calVoltage(raw_data);
+                if (!initialized) {
+                    ema = sample;
+                    initialized = true;
+                } else {
+                    ema = EMA_ALPHA * sample + (1.0 - EMA_ALPHA) * ema;
                 }
 
-                initialization = false;
-            }
-            else {
-                if (getVoltageReading(A2D_FILE_VOLTAGE1, &raw_data)) {
-                    pthread_mutex_lock(&data->mutexIR);
-                    {
-                        data->IR_buffer[index] = calVoltage(raw_data);
-                    }
-                    pthread_mutex_unlock(&data->mutexIR);
+                pthread_mutex_lock(&data->mutexIR);
+                {
+                    data->IR_ema = ema;
                 }
-                index++;
+                pthread_mutex_unlock(&data->mutexIR);
             }
 
             sleepForMs(250);
-        } 
-        else {
+        } else {
             return NULL;
         }
     }
@@ -178,6 +139,8 @@ void *readAirSensors(void *arg)
 {
     struct thread_data *data = arg;
     bool end_thread = false;
+    bool co_init = false, co2_init = false, smoke_init = false;
+    double co_ema = 0.0, co2_ema = 0.0, smoke_ema = 0.0;
 
     pthread_mutex_lock(&data->mutexAir);
     {
@@ -187,7 +150,7 @@ void *readAirSensors(void *arg)
     }
     pthread_mutex_unlock(&data->mutexAir);
 
-    while(1) {
+    while (1) {
         pthread_mutex_lock(&data->mutexControl);
         {
             end_thread = data->end_all_threads;
@@ -196,25 +159,39 @@ void *readAirSensors(void *arg)
 
         watchdogKick(data, WATCHDOG_IDX_AIR);
 
-        if(end_thread == false) {
+        if (end_thread == false) {
             int raw_CO = 0, raw_CO2 = 0, raw_smoke = 0;
             bool ok_CO    = getVoltageReading(A2D_FILE_VOLTAGE5, &raw_CO);
             bool ok_CO2   = getVoltageReading(A2D_FILE_VOLTAGE2, &raw_CO2);
             bool ok_smoke = getVoltageReading(A2D_FILE_VOLTAGE3, &raw_smoke);
 
+            if (ok_CO) {
+                double s = calVoltage(raw_CO);
+                co_ema = co_init ? EMA_ALPHA * s + (1.0 - EMA_ALPHA) * co_ema : s;
+                co_init = true;
+            }
+            if (ok_CO2) {
+                double s = calVoltage(raw_CO2);
+                co2_ema = co2_init ? EMA_ALPHA * s + (1.0 - EMA_ALPHA) * co2_ema : s;
+                co2_init = true;
+            }
+            if (ok_smoke) {
+                double s = calVoltage(raw_smoke);
+                smoke_ema = smoke_init ? EMA_ALPHA * s + (1.0 - EMA_ALPHA) * smoke_ema : s;
+                smoke_init = true;
+            }
+
             pthread_mutex_lock(&data->mutexAir);
             {
-                if (ok_CO)    data->CO_value    = calVoltage(raw_CO);
-                if (ok_CO2)   data->CO2_value   = calVoltage(raw_CO2);
-                if (ok_smoke) data->smoke_value = calVoltage(raw_smoke);
+                if (ok_CO)    data->CO_value    = co_ema;
+                if (ok_CO2)   data->CO2_value   = co2_ema;
+                if (ok_smoke) data->smoke_value  = smoke_ema;
             }
             pthread_mutex_unlock(&data->mutexAir);
 
             sleepForMs(250);
-        }
-        else {
+        } else {
             return NULL;
         }
     }
 }
-
