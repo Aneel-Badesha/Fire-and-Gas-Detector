@@ -1,25 +1,45 @@
-all: main
-	cp main $(HOME)/cmpt433/public/myApps/main
+.PHONY: all clean
 
-main: main.o sensor.o common.o output.o user.o
-	arm-linux-gnueabihf-gcc -D _POSIX_C_SOURCE=200809L -pthread -Wall -O2 -std=c17 -Wall -Werror -Wvla -Wextra -o main sensor.o common.o user.o output.o main.o  -lm
+BUILDDIR = build
+CFLAGS = -D _POSIX_C_SOURCE=200809L -O2 -std=c17 -Wall -Werror -Wvla -Wextra
+LDFLAGS = -pthread -lm
 
-user.o: user.c user.h common.h
-	arm-linux-gnueabihf-gcc -D _POSIX_C_SOURCE=200809L -Wall -O2 -std=c17 -Wall -Werror -Wvla -Wextra -c user.c
+# Use cross-compiler if available else native gcc
+CROSS := $(shell which arm-linux-gnueabihf-gcc 2>/dev/null)
+ifneq ($(CROSS),)
+	CC = arm-linux-gnueabihf-gcc
+else
+	CC = gcc
+endif
 
-output.o: output.c output.h common.h
-	arm-linux-gnueabihf-gcc -D _POSIX_C_SOURCE=200809L -Wall -O2 -std=c17 -Wall -Werror -Wvla -Wextra -c output.c
+OBJS = $(BUILDDIR)/main.o $(BUILDDIR)/sensor.o $(BUILDDIR)/common.o \
+       $(BUILDDIR)/output.o $(BUILDDIR)/user.o $(BUILDDIR)/watchdog.o
 
-sensor.o: sensor.c sensor.h common.h
-	arm-linux-gnueabihf-gcc -D _POSIX_C_SOURCE=200809L -Wall -O2 -std=c17 -Wall -Werror -Wvla -Wextra -c sensor.c
+all: $(BUILDDIR)/main
 
-common.o: common.c common.h
-	arm-linux-gnueabihf-gcc -D _POSIX_C_SOURCE=200809L -Wall -O2 -std=c17 -Wall -Werror -Wvla -Wextra -c common.c
+$(BUILDDIR)/main: $(OBJS) | $(BUILDDIR)
+	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LDFLAGS)
 
-main.o: main.c sensor.h user.h common.h output.h
-	arm-linux-gnueabihf-gcc -D _POSIX_C_SOURCE=200809L -Wall -O2 -std=c17 -Wall -Werror -Wvla -Wextra -c main.c
- 
+$(BUILDDIR)/main.o: main.c sensor.h user.h common.h output.h watchdog.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/sensor.o: sensor.c sensor.h common.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/common.o: common.c common.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/output.o: output.c output.h common.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/user.o: user.c user.h common.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/watchdog.o: watchdog.c watchdog.h common.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILDDIR):
+	mkdir -p $(BUILDDIR)
+
 clean:
-	rm -f *.o
-	rm -f main
-	
+	rm -rf $(BUILDDIR)
