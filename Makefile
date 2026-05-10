@@ -43,3 +43,4 @@ $(BUILDDIR):
 
 clean:
 	rm -rf $(BUILDDIR)
+	rm -f *.o main

@@ -1,4 +1,4 @@
-// Header file common functions/libraries between modules
+// Shared types, constants, and utility function declarations used across all modules
 
 #ifndef COMMON_H_
 #define COMMON_H_
@@ -14,58 +14,86 @@
 #include <fcntl.h>
 #include <string.h>
 
-#define IRPOINT 1.75
-#define TEMPPOINT 27.0
-#define COPOINT 0.9
-#define CO2POINT 0.9
-#define SMOKEPOINT 0.65
+// Alarm threshold voltages (V)
+#define IRPOINT    1.75f
+#define COPOINT    0.9f
+#define CO2POINT   0.9f
+#define SMOKEPOINT 0.65f
+#define TEMPPOINT  27.0f
 
-#define EMA_ALPHA 0.6
+#define EMA_ALPHA          0.6f
+#define WATCHDOG_TIMEOUT_S 5     // watchdog timeout (s) for all threads
 
-#define WATCHDOG_TIMEOUT_S 5
-#define WATCHDOG_THREAD_COUNT 6
+// Sensor indices — index into thread_data.value[], thread_data.alarm[], g_mutex_sensor[]
+typedef enum {
+    SENSOR_TEMP = 0,
+    SENSOR_IR,
+    SENSOR_CO,
+    SENSOR_CO2,
+    SENSOR_SMOKE,
+    SENSOR_COUNT
+} sensor_idx_t;
 
-#define WATCHDOG_IDX_TEMP   0
-#define WATCHDOG_IDX_IR     1
-#define WATCHDOG_IDX_AIR    2
-#define WATCHDOG_IDX_STATUS 3
-#define WATCHDOG_IDX_ALARM  4
-#define WATCHDOG_IDX_OUTPUT 5
+// Thread indices — index into g_tid[]
+typedef enum {
+    THREAD_IDX_USER = 0,
+    THREAD_IDX_TEMP,
+    THREAD_IDX_IR,
+    THREAD_IDX_CO,
+    THREAD_IDX_CO2,
+    THREAD_IDX_SMOKE,
+    THREAD_IDX_STATUS,
+    THREAD_IDX_ALARM,
+    THREAD_IDX_OUTPUT,
+    THREAD_IDX_WATCHDOG,
+    THREAD_COUNT
+} thread_idx_t;
 
-// Mutex acquisition order to avoid deadlock, threads MUST acquire these
-// locks in this order (and release in reverse)
-//
-//   1. mutexControl
-//   2. mutexAir
-//   3. mutexTemp
-//   4. mutexIR
-//   5. mutexAlarm
-//   6. mutexWatchdog
-//
-// Most threads only need one lock at a time
-struct thread_data
-{
-    pthread_mutex_t mutexControl, mutexTemp, mutexIR, mutexAir, mutexAlarm;
-    pthread_mutex_t mutexWatchdog;
-    pthread_t id_user, id_temp, id_air, id_IR, id_status, id_output, id_alarm, id_watchdog;
+// Watchdog indices index into thread_data.watchdog_kicks
+// Must stay in sync with THREAD_COUNT (one entry per monitored thread)
+#define WATCHDOG_THREAD_COUNT THREAD_COUNT
+#define WATCHDOG_IDX_USER    THREAD_IDX_USER
+#define WATCHDOG_IDX_TEMP    THREAD_IDX_TEMP
+#define WATCHDOG_IDX_IR      THREAD_IDX_IR
+#define WATCHDOG_IDX_CO      THREAD_IDX_CO
+#define WATCHDOG_IDX_CO2     THREAD_IDX_CO2
+#define WATCHDOG_IDX_SMOKE   THREAD_IDX_SMOKE
+#define WATCHDOG_IDX_STATUS  THREAD_IDX_STATUS
+#define WATCHDOG_IDX_ALARM   THREAD_IDX_ALARM
+#define WATCHDOG_IDX_OUTPUT  THREAD_IDX_OUTPUT
+#define WATCHDOG_IDX_WATCHDOG THREAD_IDX_WATCHDOG
 
-    // Uses mutexControl
+// Global mutexes and thread IDs
+// Defined in common.c, declared here
+extern pthread_mutex_t g_mutex_control;
+extern pthread_mutex_t g_mutex_sensor[SENSOR_COUNT]; // one per sensor, indexed by sensor_idx_t
+extern pthread_mutex_t g_mutex_alarm;
+extern pthread_mutex_t g_mutex_watchdog;
+extern pthread_t       g_tid[THREAD_COUNT];
+
+// Initialise / destroy all global mutexes
+void globalsInit(void);
+void globalsDestroy(void);
+
+// Shared runtime state passed to every thread
+struct thread_data {
+    // Protected by g_mutex_control
     bool end_all_threads;
 
-    // Uses mutexWatchdog
+    // Protected by g_mutex_watchdog
     time_t watchdog_kicks[WATCHDOG_THREAD_COUNT];
 
-    double temp_value, smoke_value, CO_value, CO2_value, IR_value;
-    bool alarm_temp, alarm_smoke, alarm_CO, alarm_CO2, alarm_IR;
-    bool warning_alarm, general_alarm, obstructed_alarm;
+    // Protected by g_mutex_sensor[i]
+    float value[SENSOR_COUNT];
+    float ema_ir; // written by readIR at 50ms; calculateStatus reads and publishes to value[SENSOR_IR]
 
-    double IR_ema;
+    // Protected by g_mutex_alarm
+    bool alarm[SENSOR_COUNT];
+    bool general_alarm;
+    bool obstructed_alarm;
 };
 
-// Sleep in ms
-void sleepForMs(long long delayInMs);
-
-// Kick the watchdog timer for the given thread index
+void sleepForMs(long long delay_ms);
 void watchdogKick(struct thread_data *data, int thread_idx);
 
 #endif

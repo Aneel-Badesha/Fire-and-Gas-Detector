@@ -6,6 +6,7 @@
 #include "user.h"
 #include "watchdog.h"
 
+// Initialises hardware pins, spawns all sensor/logic/watchdog threads, and waits for shutdown
 int main(void)
 {
     if (system("config-pin P9_17 i2c") != 0) {
@@ -15,87 +16,83 @@ int main(void)
         fprintf(stderr, "Error: Failed to configure pin P9_18 for I2C\n");
     }
 
-    struct thread_data thread_data;
-    thread_data.end_all_threads = false;
+    globalsInit();
 
-    // Initialize watchdog kick times to now so threads have time to start
+    struct thread_data td;
+    td.end_all_threads  = false;
+    td.ema_ir           = 0.0f;
+    td.general_alarm    = false;
+    td.obstructed_alarm = false;
+
     time_t now = time(NULL);
     for (int i = 0; i < WATCHDOG_THREAD_COUNT; i++) {
-        thread_data.watchdog_kicks[i] = now;
+        td.watchdog_kicks[i] = now;
+    }
+    for (int i = 0; i < SENSOR_COUNT; i++) {
+        td.value[i] = 0.0f;
+        td.alarm[i] = false;
     }
 
-    // Initialize mutexes
-    pthread_mutex_init(&thread_data.mutexControl, NULL);
-    pthread_mutex_init(&thread_data.mutexTemp, NULL);
-    pthread_mutex_init(&thread_data.mutexIR, NULL);
-    pthread_mutex_init(&thread_data.mutexAir, NULL);
-    pthread_mutex_init(&thread_data.mutexAlarm, NULL);
-    pthread_mutex_init(&thread_data.mutexWatchdog, NULL);
-
-    // Start threads
-    if (pthread_create(&thread_data.id_user, NULL, exitProgram, &thread_data) != 0) {
+    if (pthread_create(&g_tid[THREAD_IDX_USER], NULL, exitProgram, &td) != 0) {
         fprintf(stderr, "Error creating user thread\n");
         return 1;
     }
-    if (pthread_create(&thread_data.id_temp, NULL, readTemperature, &thread_data) != 0) {
+    if (pthread_create(&g_tid[THREAD_IDX_TEMP], NULL, readTemperature, &td) != 0) {
         fprintf(stderr, "Error creating temperature thread\n");
         return 1;
     }
-    if (pthread_create(&thread_data.id_IR, NULL, readIR, &thread_data) != 0) {
+    if (pthread_create(&g_tid[THREAD_IDX_IR], NULL, readIR, &td) != 0) {
         fprintf(stderr, "Error creating IR thread\n");
         return 1;
     }
-    if (pthread_create(&thread_data.id_air, NULL, readAirSensors, &thread_data) != 0) {
-        fprintf(stderr, "Error creating air sensors thread\n");
+    if (pthread_create(&g_tid[THREAD_IDX_CO], NULL, readCO, &td) != 0) {
+        fprintf(stderr, "Error creating CO thread\n");
         return 1;
     }
-    
+    if (pthread_create(&g_tid[THREAD_IDX_CO2], NULL, readCO2, &td) != 0) {
+        fprintf(stderr, "Error creating CO2 thread\n");
+        return 1;
+    }
+    if (pthread_create(&g_tid[THREAD_IDX_SMOKE], NULL, readSmoke, &td) != 0) {
+        fprintf(stderr, "Error creating smoke thread\n");
+        return 1;
+    }
 
     sleepForMs(1000);
-    if (pthread_create(&thread_data.id_status, NULL, calculateStatus, &thread_data) != 0) {
+
+    if (pthread_create(&g_tid[THREAD_IDX_STATUS], NULL, calculateStatus, &td) != 0) {
         fprintf(stderr, "Error creating status thread\n");
         return 1;
     }
-    if (pthread_create(&thread_data.id_alarm, NULL, calcAlarm, &thread_data) != 0) {
+    if (pthread_create(&g_tid[THREAD_IDX_ALARM], NULL, calcAlarm, &td) != 0) {
         fprintf(stderr, "Error creating alarm thread\n");
         return 1;
     }
-    if (pthread_create(&thread_data.id_output, NULL, displayOutput, &thread_data) != 0) {
+    if (pthread_create(&g_tid[THREAD_IDX_OUTPUT], NULL, displayOutput, &td) != 0) {
         fprintf(stderr, "Error creating output thread\n");
         return 1;
     }
-    if (pthread_create(&thread_data.id_watchdog, NULL, watchdogMonitor, &thread_data) != 0) {
+    if (pthread_create(&g_tid[THREAD_IDX_WATCHDOG], NULL, watchdogMonitor, &td) != 0) {
         fprintf(stderr, "Error creating watchdog thread\n");
         return 1;
     }
 
-    while(1) {
-        
-        // Check for USER button
-        pthread_mutex_lock(&thread_data.mutexControl);
+    while (1) {
+        pthread_mutex_lock(&g_mutex_control);
         {
-            if(thread_data.end_all_threads == true) {
-                // Make sure to unlock mutex before waiting
-                pthread_mutex_unlock(&thread_data.mutexControl);
-                pthread_join(thread_data.id_user, NULL);
-                pthread_join(thread_data.id_watchdog, NULL);
+            if (td.end_all_threads == true) {
+                pthread_mutex_unlock(&g_mutex_control);
+                pthread_join(g_tid[THREAD_IDX_USER],     NULL);
+                pthread_join(g_tid[THREAD_IDX_WATCHDOG], NULL);
                 break;
             }
         }
-        pthread_mutex_unlock(&thread_data.mutexControl);  
- 
+        pthread_mutex_unlock(&g_mutex_control);
+
         sleepForMs(1000);
     }
 
     printf("Exiting Program!\n");
-
-    // Destroy mutexes
-    pthread_mutex_destroy(&thread_data.mutexControl);
-    pthread_mutex_destroy(&thread_data.mutexTemp);
-    pthread_mutex_destroy(&thread_data.mutexIR);
-    pthread_mutex_destroy(&thread_data.mutexAir);
-    pthread_mutex_destroy(&thread_data.mutexAlarm);
-    pthread_mutex_destroy(&thread_data.mutexWatchdog);
-
+    globalsDestroy();
     return 0;
 }

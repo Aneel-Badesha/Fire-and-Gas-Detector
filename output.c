@@ -9,13 +9,14 @@ static const unsigned char LED_ROW_REGS[8] = {
     LED_REG_ROW4, LED_REG_ROW5, LED_REG_ROW6, LED_REG_ROW7,
 };
 
-// 8-row pattern: rendered as the "!" glyph used for the warning state.
+// 8-row pattern rendered as ! used for the warning state
 static const unsigned char LED_PATTERN_WARNING[8] = {
     LED_PATTERN_EXCLAMATION, LED_PATTERN_EXCLAMATION, LED_PATTERN_EXCLAMATION,
     LED_PATTERN_EXCLAMATION, LED_PATTERN_EXCLAMATION, LED_PATTERN_OFF,
     LED_PATTERN_OFF,         LED_PATTERN_EXCLAMATION,
 };
 
+// Opens an I2C bus and binds it to the given slave address returns fd or -1 on failure
 int i2cOpenBus(const char *bus_path, int slave_addr)
 {
     int fd = open(bus_path, O_RDWR);
@@ -31,6 +32,7 @@ int i2cOpenBus(const char *bus_path, int slave_addr)
     return fd;
 }
 
+// Writes a single-byte command to the I2C device
 int i2cWriteCmd(int fd, unsigned char cmd)
 {
     if (write(fd, &cmd, 1) != 1) {
@@ -40,6 +42,7 @@ int i2cWriteCmd(int fd, unsigned char cmd)
     return 0;
 }
 
+// Writes a value to a register on the I2C device
 int i2cWriteReg(int fd, unsigned char reg, unsigned char value)
 {
     unsigned char buf[2] = { reg, value };
@@ -50,6 +53,7 @@ int i2cWriteReg(int fd, unsigned char reg, unsigned char value)
     return 0;
 }
 
+// Writes an 8-row bitmap pattern to the LED matrix over I2C
 static void ledWritePattern(int fd, const unsigned char rows[8])
 {
     if (fd < 0) return;
@@ -58,6 +62,7 @@ static void ledWritePattern(int fd, const unsigned char rows[8])
     }
 }
 
+// Fills all 8 rows of the LED matrix with the same byte value
 static void ledFill(int fd, unsigned char value)
 {
     if (fd < 0) return;
@@ -66,161 +71,146 @@ static void ledFill(int fd, unsigned char value)
     }
 }
 
-bool thresholdHigh(double value, double tpoint) {
+// Returns true if value exceeds the threshold
+bool thresholdHigh(float value, float tpoint) {
     return value > tpoint;
 }
 
-bool thresholdLow(double value, double tpoint) {
-    return value < tpoint;
-}
-
+// Prints sensor readings to stdout every 2.5s or warns if the board is obstructed
 void *displayOutput(void *arg)
 {
     struct thread_data *data = arg;
     bool end_thread = false;
     bool initialization = true;
-    
+
     bool alarm_state = false;
     bool obstructed = false;
 
-    while(1) {
-        pthread_mutex_lock(&data->mutexControl);
+    while (1) {
+        pthread_mutex_lock(&g_mutex_control);
         {
             end_thread = data->end_all_threads;
         }
-        pthread_mutex_unlock(&data->mutexControl);
+        pthread_mutex_unlock(&g_mutex_control);
 
         watchdogKick(data, WATCHDOG_IDX_OUTPUT);
 
-        pthread_mutex_lock(&data->mutexAlarm);
+        pthread_mutex_lock(&g_mutex_alarm);
         {
             alarm_state = data->general_alarm;
-            obstructed = data->obstructed_alarm;
+            obstructed  = data->obstructed_alarm;
         }
-        pthread_mutex_unlock(&data->mutexAlarm);
+        pthread_mutex_unlock(&g_mutex_alarm);
 
-        if(end_thread == false) {
-        if(initialization == true) {
-            initialization = false;
-            sleepForMs(1000);
-            }
-            
-            else {
-            if((obstructed == false) || (alarm_state == true)) {
-                // Snapshot under each lock individually; print after release
-                // so we never hold two locks at once.
-                double co_v, co2_v, smoke_v, temp_v, ir_v;
+        if (end_thread == false) {
+            if (initialization == true) {
+                initialization = false;
+                sleepForMs(1000);
+            } else {
+                if ((obstructed == false) || (alarm_state == true)) {
+                    float value_co, value_co2, value_smoke, value_temp, value_ir;
 
-                pthread_mutex_lock(&data->mutexAir);
-                {
-                    co_v    = data->CO_value;
-                    co2_v   = data->CO2_value;
-                    smoke_v = data->smoke_value;
+                    pthread_mutex_lock(&g_mutex_sensor[SENSOR_CO]);
+                    { value_co = data->value[SENSOR_CO]; }
+                    pthread_mutex_unlock(&g_mutex_sensor[SENSOR_CO]);
+
+                    pthread_mutex_lock(&g_mutex_sensor[SENSOR_CO2]);
+                    { value_co2 = data->value[SENSOR_CO2]; }
+                    pthread_mutex_unlock(&g_mutex_sensor[SENSOR_CO2]);
+
+                    pthread_mutex_lock(&g_mutex_sensor[SENSOR_SMOKE]);
+                    { value_smoke = data->value[SENSOR_SMOKE]; }
+                    pthread_mutex_unlock(&g_mutex_sensor[SENSOR_SMOKE]);
+
+                    pthread_mutex_lock(&g_mutex_sensor[SENSOR_TEMP]);
+                    { value_temp = data->value[SENSOR_TEMP]; }
+                    pthread_mutex_unlock(&g_mutex_sensor[SENSOR_TEMP]);
+
+                    pthread_mutex_lock(&g_mutex_sensor[SENSOR_IR]);
+                    { value_ir = data->value[SENSOR_IR]; }
+                    pthread_mutex_unlock(&g_mutex_sensor[SENSOR_IR]);
+
+                    printf("\nTemperature: %.2f, IR Voltage: %.2f \n", value_temp, value_ir);
+                    printf("CO Voltage: %.2f, CO2 Voltage: %.2f, Smoke Voltage: %.2f \n\n",
+                           value_co, value_co2, value_smoke);
+                } else if ((obstructed == true) && (alarm_state == false)) {
+                    printf("WARNING: Board likely obstructed!\n");
+                    printf("\n");
                 }
-                pthread_mutex_unlock(&data->mutexAir);
 
-                pthread_mutex_lock(&data->mutexTemp);
-                {
-                    temp_v = data->temp_value;
-                }
-                pthread_mutex_unlock(&data->mutexTemp);
-
-                pthread_mutex_lock(&data->mutexIR);
-                {
-                    ir_v = data->IR_value;
-                }
-                pthread_mutex_unlock(&data->mutexIR);
-
-                printf("\nTemperature: %.2f, IR Voltage: %.2f \n", temp_v, ir_v);
-                printf("CO Voltage: %.2f, CO2 Voltage: %.2f, Smoke Voltage: %.2f \n\n",
-                       co_v, co2_v, smoke_v);
+                sleepForMs(2500);
             }
-            else
-            if((obstructed == true) && (alarm_state == false)) {
-                printf("WARNING: Board likely obstructed!\n");
-                printf("\n");
-            }
-
-            sleepForMs(2500);
-        }
-        }
-        else 
-        if(end_thread == true) {
+        } else {
             return NULL;
         }
-        
-        initialization = false;
-        sleepForMs(2500);
     }
-
 }
 
+// Ccompares sensor EMA values against thresholds and sets per-sensor alarm flags every 500ms
 void *calculateStatus(void *arg)
 {
     struct thread_data *data = arg;
     bool end_thread = false;
     bool initialization = true;
 
-    while(1) {
-        pthread_mutex_lock(&data->mutexControl);
+    while (1) {
+        pthread_mutex_lock(&g_mutex_control);
         {
             end_thread = data->end_all_threads;
         }
-        pthread_mutex_unlock(&data->mutexControl);
+        pthread_mutex_unlock(&g_mutex_control);
 
         watchdogKick(data, WATCHDOG_IDX_STATUS);
 
-        if(end_thread == false) {
-        if(initialization == false) {
+        if (end_thread == false) {
+            if (initialization == false) {
+                float value_co, value_co2, value_smoke, value_temp;
 
-            // Snapshot raw sensor values under their own locks first, then
-            // take mutexAlarm last (see lock order in common.h).
-            double co_value, co2_value, smoke_value, temp_value;
+                pthread_mutex_lock(&g_mutex_sensor[SENSOR_CO]);
+                { value_co = data->value[SENSOR_CO]; }
+                pthread_mutex_unlock(&g_mutex_sensor[SENSOR_CO]);
 
-            pthread_mutex_lock(&data->mutexAir);
-            {
-                co_value    = data->CO_value;
-                co2_value   = data->CO2_value;
-                smoke_value = data->smoke_value;
+                pthread_mutex_lock(&g_mutex_sensor[SENSOR_CO2]);
+                { value_co2 = data->value[SENSOR_CO2]; }
+                pthread_mutex_unlock(&g_mutex_sensor[SENSOR_CO2]);
+
+                pthread_mutex_lock(&g_mutex_sensor[SENSOR_SMOKE]);
+                { value_smoke = data->value[SENSOR_SMOKE]; }
+                pthread_mutex_unlock(&g_mutex_sensor[SENSOR_SMOKE]);
+
+                pthread_mutex_lock(&g_mutex_sensor[SENSOR_TEMP]);
+                { value_temp = data->value[SENSOR_TEMP]; }
+                pthread_mutex_unlock(&g_mutex_sensor[SENSOR_TEMP]);
+
+                float value_ir_ema = 0.0f;
+                pthread_mutex_lock(&g_mutex_sensor[SENSOR_IR]);
+                {
+                    value_ir_ema = data->ema_ir;
+                    data->value[SENSOR_IR] = value_ir_ema;
+                }
+                pthread_mutex_unlock(&g_mutex_sensor[SENSOR_IR]);
+
+                pthread_mutex_lock(&g_mutex_alarm);
+                {
+                    data->alarm[SENSOR_IR]    = thresholdHigh(value_ir_ema, IRPOINT);
+                    data->alarm[SENSOR_TEMP]  = thresholdHigh(value_temp, TEMPPOINT);
+                    data->alarm[SENSOR_CO]    = thresholdHigh(value_co, COPOINT);
+                    data->alarm[SENSOR_CO2]   = thresholdHigh(value_co2, CO2POINT);
+                    data->alarm[SENSOR_SMOKE] = thresholdHigh(value_smoke, SMOKEPOINT);
+                }
+                pthread_mutex_unlock(&g_mutex_alarm);
+
+                sleepForMs(500);
+            } else {
+                initialization = false;
             }
-            pthread_mutex_unlock(&data->mutexAir);
-
-            pthread_mutex_lock(&data->mutexTemp);
-            {
-                temp_value = data->temp_value;
-            }
-            pthread_mutex_unlock(&data->mutexTemp);
-
-            double ir_ema = 0.0;
-            pthread_mutex_lock(&data->mutexIR);
-            {
-                ir_ema = data->IR_ema;
-                data->IR_value = ir_ema;
-            }
-            pthread_mutex_unlock(&data->mutexIR);
-
-            pthread_mutex_lock(&data->mutexAlarm);
-            {
-                data->alarm_IR    = thresholdHigh(ir_ema, IRPOINT);
-                data->alarm_temp  = thresholdLow(temp_value, TEMPPOINT);
-                data->alarm_CO    = thresholdHigh(co_value, COPOINT);
-                data->alarm_CO2   = thresholdHigh(co2_value, CO2POINT);
-                data->alarm_smoke = thresholdHigh(smoke_value, SMOKEPOINT);
-            }
-            pthread_mutex_unlock(&data->mutexAlarm);
-
-            sleepForMs(500);
-        }
-        else {
-            initialization = false;
-        }
-        }
-        else {
+        } else {
             return NULL;
         }
     }
 }
 
+// Aggregates alarm flags, drives the LED matrix, and prints alarm/warning messages every 250ms
 void *calcAlarm(void *arg)
 {
     struct thread_data *data = arg;
@@ -233,13 +223,13 @@ void *calcAlarm(void *arg)
 
     // Hold timer: when an alarm/warning fires, keep it asserted for
     // ALARM_HOLD_TICKS more iterations so brief sensor dips don't drop the
-    // siren. One tick = ~250 ms (see sleepForMs at end of loop).
+    // siren. One tick = ~250 ms (see sleepForMs at end of loop)
     const int ALARM_HOLD_TICKS = 10;
     int hold_ticks_remaining = 0;
 
-    bool temp_trigger, ir_trigger, smoke_trigger, CO_trigger, CO2_trigger;
+    bool trigger_temp, trigger_ir, trigger_smoke, trigger_co, trigger_co2;
 
-    // Open the I2C bus once and configure the LED matrix.
+    // Open the I2C bus once and configure the LED matrix
     int i2c_fd = i2cOpenBus(I2CDRV_LINUX_BUS1, I2C_DEVICE_ADDRESS);
     if (i2c_fd >= 0) {
         i2cWriteCmd(i2c_fd, LED_REG_SYSTEM_SETUP);   // oscillator on
@@ -248,45 +238,43 @@ void *calcAlarm(void *arg)
     }
 
     // Track the last pattern written so we only push to I2C when it changes
-    // (avoids 250ms flicker and unnecessary bus traffic).
     enum { PAT_NONE, PAT_OFF, PAT_WARNING, PAT_ALARM } last_pattern = PAT_NONE;
 
-    while(1) {
-        pthread_mutex_lock(&data->mutexControl);
+    while (1) {
+        pthread_mutex_lock(&g_mutex_control);
         {
             end_thread = data->end_all_threads;
         }
-        pthread_mutex_unlock(&data->mutexControl);
+        pthread_mutex_unlock(&g_mutex_control);
 
         watchdogKick(data, WATCHDOG_IDX_ALARM);
 
-        if(end_thread == false) {
-            if(initialization == true) {
+        if (end_thread == false) {
+            if (initialization == true) {
                 initialization = false;
                 sleepForMs(1000);
-            }
-            else {
-                pthread_mutex_lock(&data->mutexAlarm);
+            } else {
+                pthread_mutex_lock(&g_mutex_alarm);
                 {
-                    temp_trigger  = data->alarm_temp;
-                    ir_trigger    = data->alarm_IR;
-                    smoke_trigger = data->alarm_smoke;
-                    CO2_trigger   = data->alarm_CO2;
-                    CO_trigger    = data->alarm_CO;
+                    trigger_temp  = data->alarm[SENSOR_TEMP];
+                    trigger_ir    = data->alarm[SENSOR_IR];
+                    trigger_smoke = data->alarm[SENSOR_SMOKE];
+                    trigger_co2   = data->alarm[SENSOR_CO2];
+                    trigger_co    = data->alarm[SENSOR_CO];
                 }
-                pthread_mutex_unlock(&data->mutexAlarm);
+                pthread_mutex_unlock(&g_mutex_alarm);
 
                 // Count how many gas/temp sensors are currently above their
-                // threshold. IR is handled separately (obstruction check).
+                // threshold. IR is handled separately
                 int trigger_count = 0;
-                if (CO_trigger)    trigger_count++;
-                if (temp_trigger)  trigger_count++;
-                if (CO2_trigger)   trigger_count++;
-                if (smoke_trigger) trigger_count++;
+                if (trigger_co)    trigger_count++;
+                if (trigger_temp)  trigger_count++;
+                if (trigger_co2)   trigger_count++;
+                if (trigger_smoke) trigger_count++;
 
-                // Latch new alarm/warning conditions.
-                // CO alone is enough to raise a full alarm.
-                bool fresh_alarm   = (CO_trigger) || (trigger_count >= 2);
+                // Latch new alarm/warning conditions
+                // CO alone is enough to raise a full alarm
+                bool fresh_alarm   = trigger_co || (trigger_count >= 2);
                 bool fresh_warning = (!fresh_alarm) && (trigger_count == 1);
 
                 if (fresh_alarm) {
@@ -297,7 +285,7 @@ void *calcAlarm(void *arg)
                     warning_state = true;
                     hold_ticks_remaining = ALARM_HOLD_TICKS;
                 } else if (hold_ticks_remaining > 0) {
-                    // Nothing currently triggering; decay the hold timer.
+                    // Nothing currently triggering; decay the hold timer
                     hold_ticks_remaining--;
                     if (hold_ticks_remaining == 0) {
                         alarm_state = false;
@@ -305,60 +293,42 @@ void *calcAlarm(void *arg)
                     }
                 }
 
-                // Obstructed: only IR is firing and no fire alarm is latched.
-                obstructed = (trigger_count == 0) && ir_trigger && !alarm_state;
+                // Obstructed: only IR is firing and no fire alarm is latched
+                obstructed = (trigger_count == 0) && trigger_ir && !alarm_state;
                 if (obstructed) {
                     warning_state = false;
                 }
 
-                pthread_mutex_lock(&data->mutexAlarm);
+                pthread_mutex_lock(&g_mutex_alarm);
                 {
-                    data->general_alarm = alarm_state;
+                    data->general_alarm    = alarm_state;
                     data->obstructed_alarm = obstructed;
                 }
-                pthread_mutex_unlock(&data->mutexAlarm);
+                pthread_mutex_unlock(&g_mutex_alarm);
 
-                if((((warning_state == true) || (obstructed == true)) && (alarm_state == false))) {
+                if (((warning_state == true) || (obstructed == true)) && (alarm_state == false)) {
                     if (last_pattern != PAT_WARNING) {
                         ledWritePattern(i2c_fd, LED_PATTERN_WARNING);
                         last_pattern = PAT_WARNING;
                     }
                 }
 
-                if((warning_state == true) && (alarm_state == false) && (obstructed == false)) {
-                        if(CO2_trigger == true) {
-                            printf("\n");
-                            printf("WARNING: CO2 levels above threshold!\n");
-                        }
-                        else
-                        if(smoke_trigger == true) {
-                            printf("\n");
-                            printf("WARNING: Smoke / Fammable Gas levels above threshold!\n");
-                        }
-                        else
-                        if(temp_trigger == true) {
-                            printf("\n");
-                            printf("WARNING: Temperature above threshold!\n");
-                        }
-                }
-                else if(alarm_state == true) {
-                    if(CO_trigger == true) {
-                        printf("\n");
-                        printf("ALARM: CO LEVEL HIGHER THAN THRESHOLD, LEAVE AREA IMMEIDIATELY!");
-                        printf("\n");
+                if ((warning_state == true) && (alarm_state == false) && (obstructed == false)) {
+                    if (trigger_co2) {
+                        printf("\nWARNING: CO2 levels above threshold!\n");
+                    } else if (trigger_smoke) {
+                        printf("\nWARNING: Smoke / Flammable Gas levels above threshold!\n");
+                    } else if (trigger_temp) {
+                        printf("\nWARNING: Temperature above threshold!\n");
                     }
-                    else {
-                        printf("\n");
-                        printf("ALARM: TWO OR MORE SENSORS ABOVE THRESHOLD: ");
-                        if(CO2_trigger == true) {
-                                printf("CO2 SENSOR, ");
-                            }
-                        if(smoke_trigger == true) {
-                                printf("SMOKE/GAS SENSOR, ");
-                            }
-                        if(temp_trigger == true) {
-                                printf("TEMPERATURE SENSOR, ");
-                            }        
+                } else if (alarm_state == true) {
+                    if (trigger_co) {
+                        printf("\nALARM: CO LEVEL HIGHER THAN THRESHOLD, LEAVE AREA IMMEDIATELY!\n");
+                    } else {
+                        printf("\nALARM: TWO OR MORE SENSORS ABOVE THRESHOLD: ");
+                        if (trigger_co2)   printf("CO2 SENSOR, ");
+                        if (trigger_smoke) printf("SMOKE/GAS SENSOR, ");
+                        if (trigger_temp)  printf("TEMPERATURE SENSOR, ");
                         printf("\n");
                     }
 
@@ -366,8 +336,7 @@ void *calcAlarm(void *arg)
                         ledFill(i2c_fd, LED_PATTERN_FULL);
                         last_pattern = PAT_ALARM;
                     }
-                }
-                else if (alarm_state == false && warning_state == false && obstructed == false) {
+                } else if (alarm_state == false && warning_state == false && obstructed == false) {
                     if (last_pattern != PAT_OFF) {
                         ledFill(i2c_fd, LED_PATTERN_OFF);
                         last_pattern = PAT_OFF;
@@ -376,8 +345,7 @@ void *calcAlarm(void *arg)
 
                 sleepForMs(250);
             }
-        }
-        else {
+        } else {
             if (i2c_fd >= 0) {
                 ledFill(i2c_fd, LED_PATTERN_OFF);
                 close(i2c_fd);

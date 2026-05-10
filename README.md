@@ -1,109 +1,119 @@
 # Multi Purpose Fire and Gas Detector
 
-An embedded fire and gas detection system built with C programming language on Debian Linux and cross-compiled for deployment on a BeagleBone Green. This system provides real-time monitoring and alerting capabilities for fire and gas hazards.
-
-## Overview
-
-This project implements a comprehensive fire and gas detection system using multiple sensors for redundant safety monitoring. The system features visual alarm capabilities and is designed for reliable operation in safety-critical environments.
+An embedded fire and gas detection system built in C on Debian Linux and cross-compiled for deployment on a BeagleBone Green. The system provides real-time monitoring and alerting for fire and gas hazards.
 
 ## Hardware Components
- 
+
 ### Target Platform
-- **BeagleBone Green**: Main processing unit and GPIO controller 
+- **BeagleBone Green**: Main processing unit and GPIO controller
 
 ### Sensors (5 total)
-- IR Sensor
-- CO Sensor
-- CO2 Sensor
-- Smoke Sensor
-- Temperature Sensor
-- Connected via the BeagleBone's on-board A2D (ADC) inputs, read through the Linux IIO interface (`/sys/bus/iio/devices/iio:device0/in_voltageN_raw`)
+| Sensor | Model | ADC Channel |
+|--------|-------|-------------|
+| Temperature | TMP36 | Channel 0 |
+| IR | TCRT5000 | Channel 1 |
+| CO2 | MQ-135 | Channel 2 |
+| Smoke | MQ-2 | Channel 3 |
+| CO | MQ-7 | Channel 5 |
+
+All sensors connect to the BeagleBone's on-board ADC inputs (1.8V reference, 12-bit resolution) and are read through the Linux IIO interface (`/sys/bus/iio/devices/iio:device0/in_voltageN_raw`).
 
 ### Display & Alerting
-- **8x8 LED Matrix**: Visual alarm display connected via I2C interface (pins P9_17/P9_18)
-- Provides clear visual indication of alarm states
+- **8x8 LED Matrix**: Visual alarm display connected via I2C (pins P9_17 / P9_18, HT16K33 at address `0x70`)
 
 ### User Input
-- **USER button**: On-board button used to gracefully shut down the system
+- **USER button**: On-board button for graceful shutdown (`/sys/class/gpio/gpio72/value`)
 
 ## Software Architecture
 
 ### Development Environment
-- **Development OS**: Debian Linux
-- **Programming Language**: C (C17, POSIX threads)
+- **Language**: C17, POSIX threads
 - **Toolchain**: `arm-linux-gnueabihf-gcc` cross-compiler (auto-detected; falls back to native `gcc`)
-- **Deployment**: Cross-compiled for ARM architecture (BeagleBone Green)
+- **Target**: ARMv7 (BeagleBone Green)
 
-### Key Features
-- Real-time multi-threaded sensor monitoring (8 pthreads: user, temperature, IR, air sensors, status, alarm, output, watchdog)
-- Exponential moving average (EMA, α=0.6) filtering on all sensor readings
-- I2C communication for LED matrix control
-- Alarm state management with warning, general, and obstructed-sensor states
-- Mutex-protected shared state between threads
-- **Watchdog timer**: Monitors all worker threads; automatically triggers shutdown if any thread becomes unresponsive
+### Threading Model
+10 POSIX threads, each monitored by the watchdog:
 
-## System Design
+| Thread | Role | Poll interval |
+|--------|------|---------------|
+| `readTemperature` | ADC → EMA → `value[SENSOR_TEMP]` | 500 ms |
+| `readIR` | ADC → EMA → `ema_ir` | 50 ms |
+| `readCO` | ADC → EMA → `value[SENSOR_CO]` | 500 ms |
+| `readCO2` | ADC → EMA → `value[SENSOR_CO2]` | 500 ms |
+| `readSmoke` | ADC → EMA → `value[SENSOR_SMOKE]` | 1000 ms |
+| `calculateStatus` | Publishes `ema_ir` → `value[SENSOR_IR]`, sets `alarm[]` flags | 500 ms |
+| `calcAlarm` | Reads `alarm[]`, drives LED matrix, prints messages | 250 ms |
+| `displayOutput` | Prints live sensor readings | 2500 ms |
+| `watchdogMonitor` | Checks all thread heartbeats, shuts down on timeout | 1000 ms |
+| `exitProgram` | Polls USER button, triggers shutdown | 100 ms |
 
-### Sensor Integration
-- Multiple sensor inputs for enhanced reliability
-- Analog sensor interfacing via the BeagleBone's 7-channel A2D (1.8V reference, 12-bit resolution)
-- Configurable threshold detection (see `*POINT` macros in [common.h](common.h))
+### Shared State (`struct thread_data`)
+All inter-thread data lives in a single `struct thread_data` passed to every thread:
 
-### Alert System
-- 8x8 LED matrix for visual warnings
-- I2C protocol for display communication
-- Customizable alarm patterns
+```c
+struct thread_data {
+    bool   end_all_threads;                    // g_mutex_control
+    time_t watchdog_kicks[THREAD_COUNT];       // g_mutex_watchdog
+    float  value[SENSOR_COUNT];                // g_mutex_sensor[i]
+    float  ema_ir;                             // g_mutex_sensor[SENSOR_IR]
+    bool   alarm[SENSOR_COUNT];                // g_mutex_alarm
+    bool   general_alarm;                      // g_mutex_alarm
+    bool   obstructed_alarm;                   // g_mutex_alarm
+};
+```
 
-### Safety Features
-- Multi-sensor redundancy
-- Real-time monitoring
-- Fail-safe alarm mechanisms
-- **Thread watchdog timer**: Each of the 6 worker threads periodically updates a timestamp. A dedicated watchdog monitor checks all timestamps every second and triggers system shutdown if any thread fails to respond within 5 seconds, ensuring system reliability in case of thread hangs or crashes
+Mutexes and thread IDs are globals (defined in `common.c`):
+- `g_mutex_control` — protects `end_all_threads`
+- `g_mutex_sensor[SENSOR_COUNT]` — one per sensor, protects `value[i]` and `ema_ir`
+- `g_mutex_alarm` — protects all `alarm[]` flags and aggregate alarm state
+- `g_mutex_watchdog` — protects `watchdog_kicks[]`
+- `g_tid[THREAD_COUNT]` — all thread IDs
 
-## Development Workflow
+### Alarm Logic
+`calculateStatus` evaluates each sensor against its threshold (defined as `*POINT` macros in [common.h](common.h)) and sets `alarm[i]`. `calcAlarm` then aggregates:
 
-1. **Development**: Code written and tested on Debian Linux
-2. **Cross-compilation**: Built for ARM target architecture
-3. **Deployment**: Transferred and executed on BeagleBone Green
-4. **Testing**: Hardware-in-the-loop verification
+- **General alarm**: CO alone, or 2+ non-IR sensors above threshold
+- **Warning**: exactly 1 non-IR sensor above threshold
+- **Obstructed**: only IR triggered with no other alarms (sensor blocked)
+
+A 10-tick hold timer (~2.5 s) prevents brief sensor dips from dropping an active alarm.
+
+### Sensor Processing
+All five sensors share a single generic loop (`runSensorLoop` in [sensor.c](sensor.c)). Each reading is filtered with an exponential moving average (EMA, α=0.6). The temperature sensor applies the TMP36 transfer function (raw → °C); all others convert raw ADC counts to volts.
+
+### Watchdog
+Every thread kicks a timestamp each iteration. `watchdogMonitor` checks all 10 timestamps every second and triggers shutdown if any thread exceeds the 5-second timeout.
+
+## Alarm Thresholds
+
+| Sensor | Threshold | Condition |
+|--------|-----------|-----------|
+| IR | > 1.75 V | Full alarm |
+| CO | > 0.9 V | Full alarm (alone) |
+| CO2 | > 0.9 V | Warning / alarm |
+| Smoke | > 0.65 V | Warning / alarm |
+| Temperature | > 27 °C | Warning / alarm |
 
 ## Getting Started
 
 ### Prerequisites
 - Linux development environment (native or WSL)
 - `arm-linux-gnueabihf-gcc` cross-compilation toolchain (optional; falls back to `gcc`)
-- BeagleBone Green with required sensors
-- 8x8 LED matrix display
+- BeagleBone Green with sensors and LED matrix wired up
 
 ### Hardware Setup
-1. Connect the 5 sensors to the BeagleBone's A2D input channels (channels 0, 1, 2, 3, 5 — see header comment in [sensor.c](sensor.c))
-2. Wire the 8x8 LED matrix to the I2C bus (pins P9_17 / P9_18)
+1. Connect sensors to ADC channels 0, 1, 2, 3, 5 (see table above)
+2. Wire the 8x8 LED matrix to I2C pins P9_17 / P9_18
 3. Ensure proper power supply for all components
 
-### Build & Deployment
-The [Makefile](Makefile) outputs all build artifacts to the `build/` directory and auto-detects the compiler:
+### Build & Deploy
 
 ```
 make          # compile; binary output to build/main
 make clean    # remove build/ directory
 ```
 
-- If `arm-linux-gnueabihf-gcc` is installed, it is used for ARM cross-compilation
-- Otherwise falls back to native `gcc` (useful for WSL/x86 development without the toolchain)
-
-1. Cross-compile the C source on the host (install toolchain: `sudo apt install gcc-arm-linux-gnueabihf`)
-2. Transfer `build/main` to the BeagleBone Green via `scp` or a shared NFS directory
-3. Ensure I2C access is configured (`main.c` calls `config-pin` for P9_17/P9_18 at startup)
-4. Run the binary on the target; press the USER button to shut down
-
-## Technical Specifications 
-
-- **Target Architecture**: ARMv7 (BeagleBone Green)
-- **Communication Protocols**: A2D (via Linux IIO), I2C, GPIO (USER button)
-- **Sensor Count**: 5 detection units
-- **Display**: 8x8 LED matrix (I2C)
-- **Concurrency**: 8 POSIX threads with mutex-protected shared state
-- **Watchdog**: 5-second per-thread timeout, checked every second
-- **Real-time Operation**: Continuous monitoring
-
-This embedded system is a robust device for fire and gas detection applications with reliable hardware interfacing and cross-platform development capabilities.
+1. Install the cross-compiler: `sudo apt install gcc-arm-linux-gnueabihf`
+2. Run `make` — binary at `build/main`
+3. Transfer to the BeagleBone: `scp build/main user@beaglebone:~`
+4. Run on target; press the USER button to shut down cleanly

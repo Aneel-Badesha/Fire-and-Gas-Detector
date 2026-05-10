@@ -1,11 +1,11 @@
-// Header file for watchdog timer
+// Watchdog monitor that shuts down the system if any thread stops responding
 
 #ifndef WATCHDOG_H_
 #define WATCHDOG_H_
 
 #include "common.h"
 
-// Monitors all worker threads; triggers shutdown if any stop responding
+// Checks all worker thread heartbeats every second and triggers shutdown on timeout
 void *watchdogMonitor(void *arg);
 
 #endif
