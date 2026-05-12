@@ -5,12 +5,12 @@
 
 #include "common.h"
 
-#define I2CDRV_LINUX_BUS1  "/dev/i2c-1"  // I2C bus device for the LED matrix
-#define I2C_DEVICE_ADDRESS 0x70          // HT16K33 LED matrix I2C address
+#define I2CDRV_LINUX_BUS1  "/dev/i2c-1"     // I2C bus device for the LED matrix
+#define I2C_DEVICE_ADDRESS 0x70             // HT16K33 LED matrix I2C address
 
 // HT16K33 command registers
-#define LED_REG_SYSTEM_SETUP  0x21  // Turns on the oscillator
-#define LED_REG_DISPLAY_SETUP 0x81  // Enables display output, no blink
+#define LED_REG_SYSTEM_SETUP  0x21          // Turn on the oscillator
+#define LED_REG_DISPLAY_SETUP 0x81          // Enable display output
 
 // Row register addresses
 // Each controls one row of the 8x8 matrix
@@ -27,8 +27,8 @@
 #define LED_PATTERN_FULL        0xFF  // All LEDs on
 #define LED_PATTERN_EXCLAMATION 0x0C  // Single column on
 
-// Opens the I2C bus and sets the slave address; returns fd or -1 on failure
-int i2cOpenBus(const char *bus_path, int slave_addr);
+// Opens the I2C bus and sets the device address, returns fd or -1 on failure
+int i2cOpenBus(const char *bus_path, int device_addr);
 
 // Writes a single-byte command to the I2C device
 int i2cWriteCmd(int fd, unsigned char cmd);
@@ -36,10 +36,7 @@ int i2cWriteCmd(int fd, unsigned char cmd);
 // Writes a value to a specific register on the I2C device
 int i2cWriteReg(int fd, unsigned char reg, unsigned char value);
 
-// Evaluates EMA sensor values and sets alarm flags in thread_data
-void *calculateStatus(void *arg);
-
-// Reads alarm flags, drives LED matrix, and prints alarm messages
+// Evaluates thresholds, drives LED matrix, and prints alarm/warning messages
 void *calcAlarm(void *arg);
 
 // Prints live sensor readings to stdout

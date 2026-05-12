@@ -2,10 +2,10 @@
 
 // Global mutex and thread ID storage (declared extern in common.h)
 pthread_mutex_t g_mutex_control;
-pthread_mutex_t g_mutex_sensor[SENSOR_COUNT];
+pthread_mutex_t g_mutex_sensor[SENSOR_MAX];
 pthread_mutex_t g_mutex_alarm;
 pthread_mutex_t g_mutex_watchdog;
-pthread_t       g_tid[THREAD_COUNT];
+pthread_t       g_tid[THREAD_IDX_MAX];
 
 // Initialises all global mutexes
 void globalsInit(void)
@@ -13,7 +13,7 @@ void globalsInit(void)
     pthread_mutex_init(&g_mutex_control,  NULL);
     pthread_mutex_init(&g_mutex_alarm,    NULL);
     pthread_mutex_init(&g_mutex_watchdog, NULL);
-    for (int i = 0; i < SENSOR_COUNT; i++) {
+    for (int i = 0; i < SENSOR_MAX; i++) {
         pthread_mutex_init(&g_mutex_sensor[i], NULL);
     }
 }
@@ -24,7 +24,7 @@ void globalsDestroy(void)
     pthread_mutex_destroy(&g_mutex_control);
     pthread_mutex_destroy(&g_mutex_alarm);
     pthread_mutex_destroy(&g_mutex_watchdog);
-    for (int i = 0; i < SENSOR_COUNT; i++) {
+    for (int i = 0; i < SENSOR_MAX; i++) {
         pthread_mutex_destroy(&g_mutex_sensor[i]);
     }
 }

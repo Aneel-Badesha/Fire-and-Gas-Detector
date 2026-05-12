@@ -58,7 +58,6 @@ void *exitProgram(void *arg)
             pthread_join(g_tid[THREAD_IDX_CO],     NULL);
             pthread_join(g_tid[THREAD_IDX_CO2],    NULL);
             pthread_join(g_tid[THREAD_IDX_SMOKE],  NULL);
-            pthread_join(g_tid[THREAD_IDX_STATUS], NULL);
             pthread_join(g_tid[THREAD_IDX_ALARM],  NULL);
             break;
         }

@@ -20,17 +20,15 @@ int main(void)
 
     struct thread_data td;
     td.end_all_threads  = false;
-    td.ema_ir           = 0.0f;
     td.general_alarm    = false;
     td.obstructed_alarm = false;
 
     time_t now = time(NULL);
-    for (int i = 0; i < WATCHDOG_THREAD_COUNT; i++) {
+    for (int i = 0; i < WATCHDOG_THREAD_IDX_MAX; i++) {
         td.watchdog_kicks[i] = now;
     }
-    for (int i = 0; i < SENSOR_COUNT; i++) {
+    for (int i = 0; i < SENSOR_MAX; i++) {
         td.value[i] = 0.0f;
-        td.alarm[i] = false;
     }
 
     if (pthread_create(&g_tid[THREAD_IDX_USER], NULL, exitProgram, &td) != 0) {
@@ -58,12 +56,8 @@ int main(void)
         return 1;
     }
 
-    sleepForMs(1000);
+    sleepForMs(2000);
 
-    if (pthread_create(&g_tid[THREAD_IDX_STATUS], NULL, calculateStatus, &td) != 0) {
-        fprintf(stderr, "Error creating status thread\n");
-        return 1;
-    }
     if (pthread_create(&g_tid[THREAD_IDX_ALARM], NULL, calcAlarm, &td) != 0) {
         fprintf(stderr, "Error creating alarm thread\n");
         return 1;

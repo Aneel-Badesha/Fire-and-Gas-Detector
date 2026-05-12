@@ -17,7 +17,7 @@
 #define A2D_MAX_READING   4095   // Maximum 12-bit ADC count
 #define A2D_MIN_READING   0      // Minimum ADC count
 
-// Sensor-specific bounds
+// Sensor specific bounds
 #define SENSOR_MIN_TEMP   50
 #define SENSOR_MAX_TEMP   3800
 #define SENSOR_MIN_IR     10
@@ -29,27 +29,38 @@
 #define SENSOR_MIN_SMOKE  50
 #define SENSOR_MAX_SMOKE  4000
 
+// Sensor config data struct
+typedef struct {
+    const char    *adc_path;        // IIO path for this sensor
+    uint32_t       min_raw;         // ADC lower bound
+    uint32_t       max_raw;         // ADC upper bound
+    sensor_idx_t   sensor_idx;      // index into thread_data.value and g_mutex_sensor
+    float         *ema_out;         // pointer to output field in thread_data
+    int            watchdog_idx;    // index into watchdog slot to kick on a valid read
+    long long      poll_ms;         // sleep duration between ADC reads
+} sensor_cfg_t;
+
 // Returns true if raw ADC count is within the sensor's valid operating range
 static inline bool sensorReadValid(uint32_t raw, uint32_t min, uint32_t max) {
     return raw >= min && raw <= max;
 }
 
-// Reads a raw ADC count from the given sysfs path; returns false on failure
+// Reads a raw ADC count from the given sysfs path, returns false on failure
 bool getVoltageReading(const char *path, uint32_t *out_value);
 
-// Reads TMP36 temperature sensor (500ms), applies EMA, updates value_temp
+// Reads temperature sensor, applies EMA, updates value_temp
 void *readTemperature(void *arg);
 
-// Reads TCRT5000 IR sensor (50ms), applies EMA, updates ema_ir
+// Reads TCRT5000 IR sensor (50ms), applies EMA, updates value[SENSOR_IR]
 void *readIR(void *arg);
 
-// Reads MQ-7 CO sensor (500ms), applies EMA, updates value_co
+// Reads CO sensor, applies EMA, updates value_co
 void *readCO(void *arg);
 
-// Reads MQ-135 CO2 sensor (500ms), applies EMA, updates value_co2
+// Reads CO2 sensor, applies EMA, updates value_co2
 void *readCO2(void *arg);
 
-// Reads MQ-2 smoke sensor (1000ms), applies EMA, updates value_smoke
+// Reads smoke sensor, applies EMA, updates value_smoke
 void *readSmoke(void *arg);
 
 #endif

@@ -1,13 +1,7 @@
 #include <inttypes.h>
 #include "sensor.h"
 
-// Channel 0 = Temperature (TMP36)
-// Channel 1 = IR          (TCRT5000)
-// Channel 2 = CO2         (MQ-135)
-// Channel 3 = Smoke       (MQ-2)
-// Channel 5 = CO          (MQ-7)
-
-// Reads a raw 12-bit ADC count from the sysfs IIO path, returns false on failure
+// Reads a raw 12-bit ADC count from the IIO path, returns false on failure
 bool getVoltageReading(const char *path, uint32_t *out_value)
 {
     FILE *f = fopen(path, "r");
@@ -29,32 +23,22 @@ bool getVoltageReading(const char *path, uint32_t *out_value)
     return true;
 }
 
-// Converts a raw ADC count to Celsius using the TMP36 transfer function
-float calcVoltageTemp(uint32_t voltage)
-{
-    float result = A2D_VOLTAGE_REF_V * ((float)voltage / (float)A2D_MAX_READING);
-    float temperature = (1000.0f * result - 500.0f) / 10.0f;
-    return temperature;
-}
-
-// Converts a raw ADC count to voltage (V) using the 1.8V reference and 12-bit range
-float calcVoltage(uint32_t voltage)
+// Converts a raw ADC count to voltage using the 1.8V vref and 12-bit range
+static float calcVoltage(uint32_t voltage)
 {
     return A2D_VOLTAGE_REF_V * ((float)voltage / (float)A2D_MAX_READING);
 }
 
-// Generic sensor loop
-typedef struct {
-    const char    *adc_path;        // sysfs IIO path for this sensor
-    uint32_t       min_raw;         // ADC lower bound
-    uint32_t       max_raw;         // ADC upper bound
-    sensor_idx_t   sensor_idx;      // index into thread_data.value and g_mutex_sensor
-    float         *out;             // pointer to output field in thread_data
-    int            watchdog_idx;
-    long long      poll_ms;
-} sensor_cfg_t;
+// Converts a raw ADC count to Celsius using the TMP36 transfer function
+static float calcTemp(uint32_t voltage)
+{
+    float result = calcVoltage(voltage);
+    float temperature = ((1000.0f * result) - 500.0f) / 10.0f;
+    return temperature;
+}
 
-// Polls one sensor at cfg->poll_ms, applies EMA, and writes the result; kicks watchdog only on a valid read
+// Polls one sensor at poll_ms, applies EMA, and writes the result
+// Kicks watchdog only on a valid read
 static void runSensorLoop(struct thread_data *data, const sensor_cfg_t *cfg)
 {
     bool initialized = false;
@@ -62,7 +46,7 @@ static void runSensorLoop(struct thread_data *data, const sensor_cfg_t *cfg)
 
     pthread_mutex_lock(&g_mutex_sensor[cfg->sensor_idx]);
     {
-        *cfg->out = 0.0f;
+        *cfg->ema_out = 0.0f;
     }
     pthread_mutex_unlock(&g_mutex_sensor[cfg->sensor_idx]);
 
@@ -78,13 +62,13 @@ static void runSensorLoop(struct thread_data *data, const sensor_cfg_t *cfg)
 
         uint32_t raw = 0;
         if (getVoltageReading(cfg->adc_path, &raw) && sensorReadValid(raw, cfg->min_raw, cfg->max_raw)) {
-            float sample = (cfg->sensor_idx == SENSOR_TEMP) ? calcVoltageTemp(raw) : calcVoltage(raw);
+            float sample = (cfg->sensor_idx == SENSOR_TEMP) ? calcTemp(raw) : calcVoltage(raw);
             ema = initialized ? EMA_ALPHA * sample + (1.0f - EMA_ALPHA) * ema : sample;
             initialized = true;
 
             pthread_mutex_lock(&g_mutex_sensor[cfg->sensor_idx]);
             {
-                *cfg->out = ema;
+                *cfg->ema_out = ema;
             }
             pthread_mutex_unlock(&g_mutex_sensor[cfg->sensor_idx]);
 
@@ -105,7 +89,7 @@ void *readTemperature(void *arg)
         .min_raw      = SENSOR_MIN_TEMP,
         .max_raw      = SENSOR_MAX_TEMP,
         .sensor_idx   = SENSOR_TEMP,
-        .out          = &data->value[SENSOR_TEMP],
+        .ema_out      = &data->value[SENSOR_TEMP],
         .watchdog_idx = WATCHDOG_IDX_TEMP,
         .poll_ms      = 500,
     };
@@ -121,7 +105,7 @@ void *readIR(void *arg)
         .min_raw      = SENSOR_MIN_IR,
         .max_raw      = SENSOR_MAX_IR,
         .sensor_idx= SENSOR_IR,
-        .out          = &data->ema_ir,   // calculateStatus reads ema_ir and publishes to value[SENSOR_IR]
+        .ema_out      = &data->value[SENSOR_IR],
         .watchdog_idx = WATCHDOG_IDX_IR,
         .poll_ms      = 50,
     };
@@ -137,7 +121,7 @@ void *readCO(void *arg)
         .min_raw      = SENSOR_MIN_CO,
         .max_raw      = SENSOR_MAX_CO,
         .sensor_idx= SENSOR_CO,
-        .out          = &data->value[SENSOR_CO],
+        .ema_out      = &data->value[SENSOR_CO],
         .watchdog_idx = WATCHDOG_IDX_CO,
         .poll_ms      = 500,
     };
@@ -153,7 +137,7 @@ void *readCO2(void *arg)
         .min_raw      = SENSOR_MIN_CO2,
         .max_raw      = SENSOR_MAX_CO2,
         .sensor_idx= SENSOR_CO2,
-        .out          = &data->value[SENSOR_CO2],
+        .ema_out      = &data->value[SENSOR_CO2],
         .watchdog_idx = WATCHDOG_IDX_CO2,
         .poll_ms      = 500,
     };
@@ -169,7 +153,7 @@ void *readSmoke(void *arg)
         .min_raw      = SENSOR_MIN_SMOKE,
         .max_raw      = SENSOR_MAX_SMOKE,
         .sensor_idx= SENSOR_SMOKE,
-        .out          = &data->value[SENSOR_SMOKE],
+        .ema_out      = &data->value[SENSOR_SMOKE],
         .watchdog_idx = WATCHDOG_IDX_SMOKE,
         .poll_ms      = 1000,
     };

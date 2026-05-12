@@ -32,17 +32,16 @@ All sensors connect to the BeagleBone's on-board ADC inputs (1.8V reference, 12-
 - **Target**: ARMv7 (BeagleBone Green)
 
 ### Threading Model
-10 POSIX threads, each monitored by the watchdog:
+9 POSIX threads, each monitored by the watchdog:
 
 | Thread | Role | Poll interval |
 |--------|------|---------------|
 | `readTemperature` | ADC → EMA → `value[SENSOR_TEMP]` | 500 ms |
-| `readIR` | ADC → EMA → `ema_ir` | 50 ms |
+| `readIR` | ADC → EMA → `value[SENSOR_IR]` | 50 ms |
 | `readCO` | ADC → EMA → `value[SENSOR_CO]` | 500 ms |
 | `readCO2` | ADC → EMA → `value[SENSOR_CO2]` | 500 ms |
 | `readSmoke` | ADC → EMA → `value[SENSOR_SMOKE]` | 1000 ms |
-| `calculateStatus` | Publishes `ema_ir` → `value[SENSOR_IR]`, sets `alarm[]` flags | 500 ms |
-| `calcAlarm` | Reads `alarm[]`, drives LED matrix, prints messages | 250 ms |
+| `calcAlarm` | Evaluates thresholds, drives LED matrix, prints messages | 250 ms |
 | `displayOutput` | Prints live sensor readings | 2500 ms |
 | `watchdogMonitor` | Checks all thread heartbeats, shuts down on timeout | 1000 ms |
 | `exitProgram` | Polls USER button, triggers shutdown | 100 ms |
@@ -52,29 +51,27 @@ All inter-thread data lives in a single `struct thread_data` passed to every thr
 
 ```c
 struct thread_data {
-    bool   end_all_threads;                    // g_mutex_control
-    time_t watchdog_kicks[THREAD_COUNT];       // g_mutex_watchdog
-    float  value[SENSOR_COUNT];                // g_mutex_sensor[i]
-    float  ema_ir;                             // g_mutex_sensor[SENSOR_IR]
-    bool   alarm[SENSOR_COUNT];                // g_mutex_alarm
-    bool   general_alarm;                      // g_mutex_alarm
-    bool   obstructed_alarm;                   // g_mutex_alarm
+    bool   end_all_threads;                        // g_mutex_control
+    time_t watchdog_kicks[THREAD_IDX_MAX];         // g_mutex_watchdog
+    float  value[SENSOR_MAX];                      // g_mutex_sensor[i]
+    bool   general_alarm;                          // g_mutex_alarm
+    bool   obstructed_alarm;                       // g_mutex_alarm
 };
 ```
 
 Mutexes and thread IDs are globals (defined in `common.c`):
 - `g_mutex_control` — protects `end_all_threads`
-- `g_mutex_sensor[SENSOR_COUNT]` — one per sensor, protects `value[i]` and `ema_ir`
-- `g_mutex_alarm` — protects all `alarm[]` flags and aggregate alarm state
+- `g_mutex_sensor[SENSOR_MAX]` — one per sensor, protects `value[i]`
+- `g_mutex_alarm` — protects `general_alarm` and `obstructed_alarm`
 - `g_mutex_watchdog` — protects `watchdog_kicks[]`
-- `g_tid[THREAD_COUNT]` — all thread IDs
+- `g_tid[THREAD_IDX_MAX]` — all thread IDs
 
 ### Alarm Logic
-`calculateStatus` evaluates each sensor against its threshold (defined as `*POINT` macros in [common.h](common.h)) and sets `alarm[i]`. `calcAlarm` then aggregates:
+`calcAlarm` reads sensor values directly, evaluates each against its threshold (defined as `*POINT` macros in [common.h](common.h)), then aggregates:
 
-- **General alarm**: CO alone, or 2+ non-IR sensors above threshold
+- **Full alarm**: CO alone, or 2+ non-IR sensors above threshold
 - **Warning**: exactly 1 non-IR sensor above threshold
-- **Obstructed**: only IR triggered with no other alarms (sensor blocked)
+- **Obstructed**: only IR triggered with no other alarms (sensor physically blocked)
 
 A 10-tick hold timer (~2.5 s) prevents brief sensor dips from dropping an active alarm.
 
@@ -82,7 +79,7 @@ A 10-tick hold timer (~2.5 s) prevents brief sensor dips from dropping an active
 All five sensors share a single generic loop (`runSensorLoop` in [sensor.c](sensor.c)). Each reading is filtered with an exponential moving average (EMA, α=0.6). The temperature sensor applies the TMP36 transfer function (raw → °C); all others convert raw ADC counts to volts.
 
 ### Watchdog
-Every thread kicks a timestamp each iteration. `watchdogMonitor` checks all 10 timestamps every second and triggers shutdown if any thread exceeds the 5-second timeout.
+Every thread kicks a timestamp each iteration. `watchdogMonitor` checks all 9 timestamps every second and triggers shutdown if any thread exceeds the 5-second timeout.
 
 ## Alarm Thresholds
 

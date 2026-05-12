@@ -1,7 +1,7 @@
 #include "watchdog.h"
 
-static const char *const thread_names[THREAD_COUNT] = {
-    "user", "temperature", "IR", "CO", "CO2", "smoke", "status", "alarm", "output", "watchdog"
+static const char *const thread_names[THREAD_IDX_MAX] = {
+    "user", "temperature", "IR", "CO", "CO2", "smoke", "alarm", "output", "watchdog"
 };
 
 // Checks per-thread heartbeat timestamps every 1s and triggers shutdown if any thread stops kicking
@@ -29,7 +29,7 @@ void *watchdogMonitor(void *arg)
 
         pthread_mutex_lock(&g_mutex_watchdog);
         {
-            for (int i = 0; i < WATCHDOG_THREAD_COUNT; i++) {
+            for (int i = 0; i < WATCHDOG_THREAD_IDX_MAX; i++) {
                 if (now - data->watchdog_kicks[i] > WATCHDOG_TIMEOUT_S) {
                     failed_idx = i;
                     break;
